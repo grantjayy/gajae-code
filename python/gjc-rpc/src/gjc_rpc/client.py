@@ -1329,6 +1329,18 @@ class RpcClient:
             next_task_id += 1
             return task_id
 
+        def normalize_notes(value: object) -> list[str] | None:
+            if value is None:
+                return None
+            if not isinstance(value, (list, tuple)):
+                raise RpcError("Todo item 'notes' must be an array of strings")
+            notes: list[str] = []
+            for index, note in enumerate(value):
+                if not isinstance(note, str):
+                    raise RpcError(f"Todo item 'notes[{index}]' must be a string")
+                notes.append(note)
+            return notes
+
         def normalize_todo_item(seed: TodoSeed) -> JsonObject:
             if isinstance(seed, str):
                 return {"id": next_task(), "content": seed, "status": cast(JsonValue, "pending")}
@@ -1336,13 +1348,16 @@ class RpcClient:
             if isinstance(seed, TodoItem):
                 if seed.status not in _TODO_STATUS_VALUES:
                     raise RpcError(f"Unsupported todo status: {seed.status}")
-                return {
+                task: JsonObject = {
                     "id": seed.id or next_task(),
                     "content": seed.content,
                     "status": cast(JsonValue, seed.status),
-                    "notes": seed.notes,
                     "details": seed.details,
                 }
+                notes = normalize_notes(seed.notes)
+                if notes is not None:
+                    task["notes"] = notes
+                return task
 
             content = seed.get("content")
             if not isinstance(content, str) or not content.strip():
@@ -1358,13 +1373,16 @@ class RpcClient:
                 status: TodoStatus = cast(TodoStatus, raw_status)
             else:
                 status = "pending"
-            return {
+            task = {
                 "id": str(raw_id) if isinstance(raw_id, str) and raw_id else next_task(),
                 "content": content,
                 "status": cast(JsonValue, status),
-                "notes": raw_notes if isinstance(raw_notes, str) else None,
                 "details": raw_details if isinstance(raw_details, str) else None,
             }
+            notes = normalize_notes(raw_notes)
+            if notes is not None:
+                task["notes"] = notes
+            return task
 
         def is_phase_seed(seed: TodoSeed | TodoPhaseSeed) -> bool:
             if isinstance(seed, TodoPhase):

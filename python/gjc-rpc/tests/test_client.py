@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 
-from gjc_rpc import RpcClient, RpcCommandError, RpcConcurrencyError, RpcError, host_tool, host_uri
+from gjc_rpc import RpcClient, RpcCommandError, RpcConcurrencyError, RpcError, TodoItem, host_tool, host_uri
 
 
 FAKE_SERVER = textwrap.dedent(
@@ -255,7 +255,19 @@ FAKE_SERVER = textwrap.dedent(
             )
         elif command_type == "set_todos":
             todo_phases = command.get("phases", [])
-            respond(request_id, "set_todos", {"todoPhases": todo_phases})
+            for phase in todo_phases:
+                for task in phase.get("tasks", []):
+                    if "notes" not in task:
+                        continue
+                    notes = task["notes"]
+                    if not isinstance(notes, list) or not all(isinstance(note, str) for note in notes):
+                        respond(request_id, "set_todos", success=False, error="notes must be omitted or an array of strings")
+                        break
+                else:
+                    continue
+                break
+            else:
+                respond(request_id, "set_todos", {"todoPhases": todo_phases})
         elif command_type == "get_messages":
             respond(request_id, "get_messages", {"messages": messages})
         elif command_type == "set_host_tools":
@@ -931,6 +943,24 @@ class RpcClientTests(unittest.TestCase):
         self.assertIn("ready", notification_types)
         self.assertIn("turn_start", notification_types)
         self.assertIn("agent_end", notification_types)
+
+    def test_set_todos_emits_authoritative_notes_wire_shape(self) -> None:
+        with self.make_client() as client:
+            cases = (
+                (TodoItem(id="dataclass-none", content="No notes", status="pending", notes=None), None),
+                ({"id": "mapping-absent", "content": "Absent notes"}, None),
+                ({"id": "mapping-none", "content": "None notes", "notes": None}, None),
+                (TodoItem(id="empty", content="Empty notes", status="pending", notes=()), ()),
+                (TodoItem(id="non-empty", content="Noted", status="pending", notes=("first", "second")), ("first", "second")),
+            )
+            for seed, expected_notes in cases:
+                with self.subTest(seed=seed):
+                    phases = client.set_todos([seed])
+                    self.assertEqual(phases[0].tasks[0].notes, expected_notes)
+
+            for invalid_notes in ("scalar", {"note": "object"}, ["valid", 42]):
+                with self.subTest(notes=invalid_notes), self.assertRaises(RpcError):
+                    client.set_todos([{"content": "Invalid notes", "notes": invalid_notes}])
 
     def test_set_todos_supports_flat_items(self) -> None:
         with self.make_client() as client:

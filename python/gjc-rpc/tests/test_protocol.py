@@ -28,6 +28,7 @@ from gjc_rpc import (
     parse_workflow_gate,
     parse_workflow_gate_event,
 )
+from gjc_rpc.protocol import TokenUsage, parse_session_stats
 
 
 def _wrapped_event(event: dict) -> dict:
@@ -113,6 +114,49 @@ class ProtocolParsingTests(unittest.TestCase):
         # Legacy bare-string systemPrompt is accepted and wrapped to a tuple.
         self.assertEqual(state.system_prompt, ("You are useful.",))
         self.assertEqual(state.dump_tools[0].name, "read")
+
+    def test_parse_todo_notes_preserves_absent_and_empty(self) -> None:
+        base_task = {"id": "task-1", "content": "Map tools", "status": "pending"}
+        for task, expected in ((base_task, None), ({**base_task, "notes": []}, ())):
+            state = parse_session_state({"sessionId": "session-123", "todoPhases": [{"name": "Todos", "tasks": [task]}]})
+            self.assertEqual(state.todo_phases[0].tasks[0].notes, expected)
+
+    def test_parse_todo_notes_rejects_explicit_null(self) -> None:
+        task = {"id": "task-1", "content": "Map tools", "status": "pending", "notes": None}
+        with self.assertRaises(ValueError):
+            parse_session_state({"sessionId": "session-123", "todoPhases": [{"name": "Todos", "tasks": [task]}]})
+
+    def test_parse_todo_notes_returns_immutable_strings(self) -> None:
+        task = {"content": "Map tools", "status": "pending", "notes": ["a", "b"]}
+        state = parse_session_state({"sessionId": "session-123", "todoPhases": [{"name": "Todos", "tasks": [task]}]})
+        notes = state.todo_phases[0].tasks[0].notes
+        self.assertEqual(notes, ("a", "b"))
+        self.assertIsInstance(notes, tuple)
+
+    def test_parse_todo_notes_rejects_malformed_values(self) -> None:
+        for notes in ("note", {"text": "note"}, ["valid", 42]):
+            with self.subTest(notes=notes), self.assertRaises(ValueError):
+                task = {"content": "Map tools", "status": "pending", "notes": notes}
+                parse_session_state({"sessionId": "session-123", "todoPhases": [{"name": "Todos", "tasks": [task]}]})
+
+    def test_parse_session_stats_requires_tokens_total(self) -> None:
+        complete = {"sessionId": "session-123", "tokens": {"input": 10, "output": 5, "cacheRead": 1, "cacheWrite": 2, "total": 18}}
+        stats = parse_session_stats(complete)
+        self.assertIsInstance(stats.tokens, TokenUsage)
+        self.assertEqual(stats.tokens.total, 18)
+
+        malformed_payloads = (
+            {"sessionId": "session-123"},
+            {"sessionId": "session-123", "tokens": None},
+            {"sessionId": "session-123", "tokens": {}},
+            {"sessionId": "session-123", "tokens": {"total": None}},
+            {"sessionId": "session-123", "tokens": {"total": "18"}},
+            {"sessionId": "session-123", "tokens": {"total": True}},
+            {"sessionId": "session-123", "tokens": {"total": False}},
+        )
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload), self.assertRaises((TypeError, ValueError)):
+                parse_session_stats(payload)
 
     def test_parse_wrapped_agent_start_notification(self) -> None:
         notification = parse_notification(
@@ -381,7 +425,14 @@ class ProtocolParsingTests(unittest.TestCase):
                                 "id": "task-1",
                                 "content": "Map tools",
                                 "status": "pending",
-                            }
+                                "notes": [],
+                            },
+                            {
+                                "id": "task-2",
+                                "content": "Record evidence",
+                                "status": "in_progress",
+                                "notes": ["done"],
+                            },
                         ],
                     },
                 },
@@ -391,6 +442,18 @@ class ProtocolParsingTests(unittest.TestCase):
         self.assertIsInstance(notification, TodoReminderEvent)
         self.assertEqual(notification.todos[0].content, "Map tools")
         self.assertEqual(notification.todos[0].status, "pending")
+        self.assertEqual(notification.todos[0].notes, ())
+        self.assertEqual(notification.todos[1].notes, ("done",))
+
+    def test_parse_wrapped_todo_reminder_rejects_null_notes(self) -> None:
+        event = {
+            "type": "todo_reminder",
+            "attempt": 1,
+            "maxAttempts": 3,
+            "todos": [{"id": "task-1", "content": "Map tools", "status": "pending", "notes": None}],
+        }
+        with self.assertRaises(ValueError):
+            parse_notification(_wrapped_event(event))
 
     def test_assistant_text_excludes_thinking_by_default(self) -> None:
         message = {

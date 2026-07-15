@@ -171,6 +171,20 @@ def _optional_str(payload: JsonObject, field: str) -> str | None:
     return value
 
 
+def _optional_tuple_of_strings(payload: JsonObject, field: str) -> tuple[str, ...] | None:
+    if field not in payload:
+        return None
+    value = payload[field]
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array of strings")
+    items: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            raise ValueError(f"{field}[{index}] must be a string")
+        items.append(item)
+    return tuple(items)
+
+
 def _optional_str_list(payload: JsonObject, field: str) -> tuple[str, ...]:
     """Parse an optional string-or-array-of-strings field.
 
@@ -207,6 +221,13 @@ def _optional_int(payload: JsonObject, field: str) -> int | None:
     value = payload.get(field)
     if value is None:
         return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    return value
+
+
+def _require_int(payload: JsonObject, field: str) -> int:
+    value = payload.get(field)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field} must be an integer")
     return value
@@ -672,7 +693,7 @@ class TodoItem:
     id: str
     content: str
     status: TodoStatus
-    notes: str | None = None
+    notes: tuple[str, ...] | None = None
     details: str | None = None
 
 
@@ -1271,7 +1292,7 @@ def parse_todo_item(payload: JsonObject) -> TodoItem:
             TodoStatus,
             _require_literal(payload.get("status", "pending"), _TODO_STATUS_VALUES, field="todo.status"),
         ),
-        notes=_optional_str(payload, "notes"),
+        notes=_optional_tuple_of_strings(payload, "notes"),
         details=_optional_str(payload, "details"),
     )
 
@@ -1413,7 +1434,7 @@ def parse_branch_messages(payload: JsonObject | None) -> tuple[BranchMessage, ..
 
 
 def parse_session_stats(payload: JsonObject) -> SessionStats:
-    tokens_payload = _optional_json_object(payload.get("tokens"), field="sessionStats.tokens") or {}
+    tokens_payload = _clone_json_object(payload.get("tokens"), field="sessionStats.tokens")
     return SessionStats(
         session_file=_optional_str(payload, "sessionFile"),
         session_id=str(payload.get("sessionId", "")),
@@ -1427,7 +1448,7 @@ def parse_session_stats(payload: JsonObject) -> SessionStats:
             output=int(tokens_payload.get("output", 0)),
             cache_read=int(tokens_payload.get("cacheRead", 0)),
             cache_write=int(tokens_payload.get("cacheWrite", 0)),
-            total=int(tokens_payload.get("total", 0)),
+            total=_require_int(tokens_payload, "total"),
         ),
         premium_requests=int(payload.get("premiumRequests", 0)),
         cost=float(payload.get("cost", 0.0)),
