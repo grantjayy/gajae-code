@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- SDK terminal prompt, skill, and correlated-steer reconciliation records no longer expire after 15 minutes. Canonical status and bounded result content remain queryable across durable restart until the existing 256-record-per-kind oldest-terminal-first capacity bound evicts them; active records, selectors, response shapes, first-terminal-wins settlement, ordered non-replay behavior, and client-reference release on capacity eviction are unchanged (#4547).
+
 - Fixed ACP `session/delete` retries so a durable artifact `cleanup_pending` result remains authoritative instead of re-closing the already-terminated session and misclassifying an unreaped Linux zombie as unverifiable SIGKILL uncertainty. Broker close now recognizes an identity-matching zombie as exited without weakening PID-reuse checks, and repeated deletes resume the authorized cleanup receipt idempotently.
 
 - Added `/extensions`, an interactive project/global `.gjc` manager for skills, hooks, MCPs, and explicit Claude Code/Codex imports with redacted previews and atomic rollback.
